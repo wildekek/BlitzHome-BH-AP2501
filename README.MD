@@ -19,3 +19,6 @@ I don't like:
 
 ## What works?
 All the things!
+
+## Preview:
+<img width="223" alt="image" src="https://user-images.githubusercontent.com/2332647/233844182-d8e2ddd6-2cd7-4bd3-9b99-4fda1581d491.png">
