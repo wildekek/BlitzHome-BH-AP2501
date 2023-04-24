@@ -97,7 +97,7 @@ output:
                         # Fan = High
                         - fan.turn_on:
                             id: tuya_fan
-                            speed: 2                        
+                            speed: 2
 
 
 fan:
@@ -111,7 +111,7 @@ fan:
     id: "tuya_fan"
     internal: True
     switch_datapoint: 1
-    speed_datapoint: 3 
+    speed_datapoint: 3
     speed_count: 4 # 1=Auto, 2=High, 3=Medium, 4=Sleep
 
 sensor:
@@ -121,7 +121,7 @@ sensor:
     sensor_datapoint: 2
     device_class: "aqi"
     state_class: "measurement"
-    accuracy_decimals: 0
+    accuracy_decimals: 1
   # Filter utilization
   - platform: "tuya"
     name: "Filter remaining"
