@@ -122,6 +122,18 @@ sensor:
     device_class: "aqi"
     state_class: "measurement"
     accuracy_decimals: 1
+    filters:
+      # Filter outlier "1" values
+      - quantile:
+          window_size: 5
+          send_every: 1
+          send_first_at: 1
+          quantile: .9
+      # Smooth out noise
+      - exponential_moving_average:
+          alpha: 0.2
+          send_every: 1
+          send_first_at: 1
   # Filter utilization
   - platform: "tuya"
     name: "Filter remaining"
