@@ -1,15 +1,20 @@
 substitutions:
   device_name: "air-purifier"
   device_friendly_name: "Air Purifier"
-  device_description: "Clean air good."
+  device_description: "BlitzWolf BH-AP2501"
   time_timezone: "Europe/Amsterdam"
-
 
 esphome:
   name: $device_name
   friendly_name: $device_friendly_name
   comment: $device_description
   name_add_mac_suffix: false
+  on_boot:
+    priority: -100
+    then:
+      # Wait for the tuya startup to complete
+      - delay: 7s
+      - switch.turn_on: auto_clean
 
 esp8266:
   board: esp12e
@@ -54,8 +59,53 @@ uart:
 # Register the Tuya MCU connection
 tuya:
 
+fan:
+  # This fan component is presented to Home Assistant
+  - platform: speed
+    output: fan_output
+    id: speed_fan
+    name: "Fan"
+    speed_count: 3
 
-# Fan control
+  # This internal fan component allows you to control the TuYa hardware
+  - platform: "tuya"
+    id: "tuya_fan"
+    internal: True
+    switch_datapoint: 1
+    speed_datapoint: 3
+    speed_count: 4 # 1=Auto, 2=High, 3=Medium, 4=Sleep
+    # Bind speed changes on device to our speed_fan
+    on_speed_set:
+      - lambda: |-
+          if (id(tuya_fan).state) {
+            auto call = id(speed_fan).turn_on();
+            if (id(tuya_fan).speed == 2) {
+              call.set_speed(3);
+            }
+            if (id(tuya_fan).speed == 3) {
+              call.set_speed(2);
+            }
+            if (id(tuya_fan).speed == 4) {
+              call.set_speed(1);
+            }
+            call.perform();
+          }
+    # Bind power changes on device to our speed_fan
+    on_turn_on:
+      - logger.log: "Fan Turned On!"
+      - fan.turn_on:
+          id: speed_fan
+      - switch.turn_on:
+          id: auto_clean
+    # Bind power changes on device to our speed_fan
+    on_turn_off:
+      - logger.log: "Fan Turned Off!"
+      - fan.turn_off:
+          id: speed_fan
+      - switch.turn_off:
+          id: auto_clean
+
+# Fan control logic
 output:
   - platform: template
     id: fan_output
@@ -66,7 +116,7 @@ output:
     # High = 1
     write_action:
       - logger.log:
-          level: INFO
+          level: DEBUG
           format: "Fan output: %f"
           args: ["state"]
       - if:
@@ -100,40 +150,53 @@ output:
                             speed: 2
 
 
-fan:
-  - platform: speed
-    output: fan_output
-    id: speed_fan
-    name: "Fan"
-    speed_count: 3
-  - platform: "tuya"
-    name: "Fan"
-    id: "tuya_fan"
-    internal: True
-    switch_datapoint: 1
-    speed_datapoint: 3
-    speed_count: 4 # 1=Auto, 2=High, 3=Medium, 4=Sleep
-
 sensor:
   # PM2.5 sensor
   - platform: "tuya"
     name: "PM2.5"
+    id: pm_25
     sensor_datapoint: 2
-    device_class: "aqi"
+    device_class: PM25
+    unit_of_measurement: µg/m³
     state_class: "measurement"
     accuracy_decimals: 1
+
+  # PM2.5 sensor with smoothing
+  - platform: template
+    name: "PM2.5 Filtered"
+    id: pm_25_filtered
+    device_class: PM25
+    unit_of_measurement: µg/m³
+    state_class: "measurement"
+    update_interval: 1s
+    lambda: return id(pm_25).state;
     filters:
+      - median:
+          window_size: 4
+          send_every: 2
+          send_first_at: 2
+      # Remove 999 error spikes
+      #- filter_out: 999
       # Filter outlier "1" values
-      - quantile:
-          window_size: 5
-          send_every: 1
-          send_first_at: 1
-          quantile: .9
+      #- quantile:
+      #    window_size: 5
+      #    send_every: 1
+      #    send_first_at: 1
+      #    quantile: .9
       # Smooth out noise
       - exponential_moving_average:
-          alpha: 0.2
+          alpha: 0.05
           send_every: 1
           send_first_at: 1
+    on_value:
+      then:
+        - if:
+            condition:
+              switch.is_on: auto_clean
+            then:
+              - script.execute: 
+                  id: auto_fan_speed
+
   # Filter utilization
   - platform: "tuya"
     name: "Filter remaining"
@@ -141,26 +204,27 @@ sensor:
     unit_of_measurement: "%"
     icon: mdi:ticket-percent-outline
     entity_category: diagnostic
+    filters:
+      - lambda: return 100-x;
   # Countdown remaining
   - platform: "tuya"
     name: "Countdown Remaining"
     sensor_datapoint: 19
-    icon: mdi:fan-clock
-    unit_of_measurement: "minutes"
+    device_class: duration
+    unit_of_measurement: "min"
   # Air quality
   - platform: "tuya"
     name: "Air Quality"
+    device_class: aqi
     sensor_datapoint: 21
-    icon: mdi:air-filter
 
 number:
   # Set countdown timer
   - platform: "tuya"
     name: "Countdown"
     number_datapoint: 18
-    unit_of_measurement: hours
-    mode: box
-    icon: "mdi:fan-clock"
+    unit_of_measurement: h
+    device_class: duration
     min_value: 0
     max_value: 24
     step: 1
@@ -169,6 +233,7 @@ switch:
   # Ionizer
   - platform: "tuya"
     name: "Ionizer"
+    id: ionizer
     switch_datapoint: 6
     icon: mdi:chart-bubble
   # UV sterilization
@@ -181,6 +246,17 @@ switch:
     id: "filter_reset"
     switch_datapoint: 11
     internal: True
+  # Auto mode
+  - platform: template
+    name: "Auto clean"
+    id: auto_clean
+    icon: "mdi:shimmer"
+    optimistic: True
+    restore_mode: ALWAYS_ON
+    turn_on_action:
+      - fan.turn_on:
+          id: speed_fan
+          speed: 1
 
 # Button to reset filter cartridge
 button:
@@ -194,3 +270,40 @@ button:
         - switch.turn_on: filter_reset
         - delay: 1s
         - switch.turn_off: filter_reset
+
+script:
+  # Determine which speeed the fan needs to run on based on the pm2.5
+  - id: auto_fan_speed
+    then:         
+      - if:
+          condition:
+            sensor.in_range:
+              id: pm_25_filtered
+              below: 20
+          then:
+            - fan.turn_on: 
+                id: speed_fan
+                speed: 1
+            - switch.turn_off:
+                id: ionizer
+      - if:
+          condition:
+            sensor.in_range:
+              id: pm_25_filtered
+              above: 30
+              below: 50
+          then:
+            - fan.turn_on: 
+                id: speed_fan
+                speed: 2
+      - if:
+          condition:
+            sensor.in_range:
+              id: pm_25_filtered
+              above: 60
+          then:
+            - fan.turn_on: 
+                id: speed_fan
+                speed: 3
+            - switch.turn_on:
+                id: ionizer
